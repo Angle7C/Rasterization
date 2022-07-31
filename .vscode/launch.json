@@ -1,0 +1,13 @@
+{
+    "configurations": [
+    {
+        "name": "go run",
+        "type": "go",
+        "request": "launch",
+        "mode": "debug",
+        "program": "main/main.go"
+    }
+    ]
+ 
+    
+}
