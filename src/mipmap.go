@@ -14,14 +14,25 @@ import (
 )
 
 type MipMaper interface {
-	GetUV(x, y float64)
-	GetRGBA(x, y int)
+	UV(l, u, v float64)
+	GetRGBA()
 }
 type MipMap struct {
 	Num        int
+	w          int
+	h          int
 	LevelImage []image.Image
 }
 
+func (mipmap *MipMap) UV(l, u, v float64) color.RGBA {
+	c := mipmap.LevelImage[int(l)].At(int(u*float64(mipmap.LevelImage[int(l)].Bounds().Dx())), int(v*float64(mipmap.LevelImage[int(l)].Bounds().Dy())))
+	r, g, b, a := c.RGBA()
+	r = r & 255
+	g = g & 255
+	b = b & 255
+	a = a & 255
+	return color.RGBA{uint8(r), uint8(g), uint8(b), uint8(a)}
+}
 func NewMipMap(path string) (mipmap *MipMap) {
 	var (
 		imag  image.Image
@@ -36,6 +47,8 @@ func NewMipMap(path string) (mipmap *MipMap) {
 		log.Fatalf("err :%v", err)
 		return
 	}
+	mipmap.w = imag.Bounds().Dx()
+	mipmap.h = imag.Bounds().Dy()
 	level = int(math.Log2(float64(imag.Bounds().Dx())) + 1)
 	mipmap.Num = level
 	mipmap.LevelImage = make([]image.Image, level)
@@ -43,8 +56,8 @@ func NewMipMap(path string) (mipmap *MipMap) {
 	for i := 1; i < level; i++ {
 		last = mipmap.LevelImage[i-1]
 		temp := image.NewRGBA(image.Rect(0, 0, last.Bounds().Dx()/2, last.Bounds().Dy()/2))
-		for k := 0; k < temp.Rect.Dx(); k += 2 {
-			for h := 0; h < temp.Rect.Dx(); h += 2 {
+		for k := 0; k < last.Bounds().Size().X; k += 2 {
+			for h := 0; h < last.Bounds().Size().Y; h += 2 {
 				r, g, b, a := last.At(k, h).RGBA()
 				r2, g2, b2, a2 := last.At(k+1, h).RGBA()
 				r3, g3, b3, a3 := last.At(k+1, h+1).RGBA()

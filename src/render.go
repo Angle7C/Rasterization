@@ -3,7 +3,9 @@ package core
 import (
 	"Matrix/matrix"
 	"Matrix/vector"
+	"fmt"
 	"image"
+	"math"
 	"sync"
 
 	"github.com/mokiat/go-data-front/decoder/obj"
@@ -16,8 +18,7 @@ type RenderPipline interface {
 	GeometryShader()
 	VertexShader()
 	FragmentShader()
-	MV()
-	P()
+	MVP()
 	ToScreen()
 	Render()
 }
@@ -35,6 +36,17 @@ type Render struct {
 	viewPort    *matrix.Matrix4
 }
 
+func (r *Render) MVP() {
+	mvp := r.perspectMat.Mul(r.viewMat.Mul(r.modelMat))
+	for i := 0; i < len(r.Points); i++ {
+		vd := mvp.MulVector3D((*vector.Vector3D)(&r.Points[i]))
+		vd.X /= vd.W
+		vd.Y /= vd.W
+		vd.Z /= vd.W
+		vd.W /= vd.W
+		r.Points[i] = PointV(*vd)
+	}
+}
 func NewRenderObj(o *obj.Model) (r *Render, err error) {
 	r = &Render{}
 	//设置点
@@ -92,18 +104,97 @@ func (r *Render) MakeViewPort(w, h float64) {
 }
 
 func (m *Render) ToScreen() {
-	// for k, v := range m.Points {
-	// 	v = *m.viewPort.MulVector3D(&v)
-	// 	m.Points[k] = v
-	// // }
+	for k, v := range m.Points {
+		v = PointV(*m.viewPort.MulVector3D((*vector.Vector3D)(&v)))
+		m.Points[k] = v
+	}
 }
-func (r *Render) Render(image *image.RGBA) {
+func (r *Render) Render(image *image.RGBA, mtl *MipMap) {
+	var (
+		WG      *sync.WaitGroup = &sync.WaitGroup{}
+		RW      *sync.RWMutex   = &sync.RWMutex{}
+		w       int             = image.Rect.Dx()
+		h       int             = image.Rect.Dy()
+		zbuffer []float64       = make([]float64, w*h)
+	)
+	for i := 0; i < len(zbuffer); i++ {
+		zbuffer[i] = math.Inf(1)
+	}
+	r.MVP()
+	r.ToScreen()
+	if len(r.Face) < 4 {
+		r.FragmentShader(0, len(r.Face), zbuffer, WG, RW, image, mtl)
+	} else {
+		// WG.Add(4)
+		// ds := len(r.Face) / 4
+		go r.FragmentShader(0, 2, zbuffer, WG, RW, image, mtl)
+		// go r.FragmentShader(ds, 2*ds, zbuffer, WG, RW, image, mtl)
+		// go r.FragmentShader(2*ds, 3*ds, zbuffer, WG, RW, image, mtl)
+		// go r.FragmentShader(3*ds, len(r.Face), zbuffer, WG, RW, image, mtl)
+		// WG.Wait()
+	}
 }
-func (face *Face) renderFace(zbuffer []float64, point []vector.Vector3D, Color []vector.Vector3D, RW *sync.RWMutex, image *image.RGBA) {
+func (face *Face) renderFace(zbuffer []float64, point []PointV, TextUV []UV, RW *sync.RWMutex, image *image.RGBA) {
+	// var (
+	// 	au, bu, cu UV
+	// 	ap, bp, cp PointV
+	// 	xmin       float64
+	// 	xmax       float64
+	// 	ymin       float64
+	// 	ymax       float64
+	// )
+	// au, bu, cu = TextUV[face.PointIndex[0]], TextUV[face.PointIndex[1]], TextUV[face.PointIndex[2]]
+	// ap, bp, cp = point[face.PointIndex[0]], point[face.PointIndex[1]], point[face.PointIndex[2]]
+	// xmin = math.Min(ap.X, math.Min(bp.X, cp.X))
+	// xmax = math.Max(ap.X, math.Max(bp.X, cp.X))
+	// ymin = math.Min(ap.Y, math.Min(bp.Y, cp.Y))
+	// ymax = math.Max(ap.Y, math.Max(bp.Y, cp.Y))
+	// for x := xmin; x < xmax; x++ {
+	// 	for y := ymin; y < ymax; y++ {
+
+	// 	}
+	// }
 
 }
-func (face *Face) BlinPhong(zbuffer []float64, point []vector.Vector3D, Color []vector.Vector3D, RW *sync.RWMutex, image *image.RGBA) {
+func (face *Face) BlinPhong(zbuffer []float64, point []PointV, TextUV []UV, RW *sync.RWMutex, image *image.RGBA, mtl *MipMap) {
+	var (
+		au, bu, cu UV
+		ap, bp, cp PointV
+		xmin       float64
+		xmax       float64
+		ymin       float64
+		ymax       float64
+		w          int = image.Rect.Dx()
+		h          int = image.Rect.Dy()
+		u          float64
+		v          float64
+	)
+	au, bu, cu = TextUV[face.PointIndex[0]], TextUV[face.PointIndex[1]], TextUV[face.PointIndex[2]]
+	ap, bp, cp = point[face.PointIndex[0]], point[face.PointIndex[1]], point[face.PointIndex[2]]
+	xmin = math.Min(ap.X, math.Min(bp.X, cp.X))
+	xmax = math.Max(ap.X, math.Max(bp.X, cp.X))
+	ymin = math.Min(ap.Y, math.Min(bp.Y, cp.Y))
+	ymax = math.Max(ap.Y, math.Max(bp.Y, cp.Y))
+	for x := int(xmin); x >= 0 && x < w && x < int(xmax); x++ {
+		for y := int(ymin); y >= 0 && y < h && y < int(ymax); y++ {
+			if judge, t := inside(&ap, &bp, &cp, vector.NewVector3D(float64(x)+0.5, float64(y)+0.5, 1)); judge {
+				z := 1.0 / (t.X/ap.Z + t.Y/bp.Z + t.Z/cp.Z)
+				u = (t.X/cp.Z*au.X + t.Y/cp.Z*bu.X + t.Z/cp.Z*cu.X) * z
+				v = (t.X/cp.Z*au.Y + t.Y/cp.Z*bu.Y + t.Z/cp.Z*cu.Y) * z
+				RW.RLock()
+				if zbuffer[x*h+y] >= z {
+					RW.RUnlock()
+					RW.Lock()
+					image.Set(int(x), int(y), mtl.UV(0, u, v))
+					zbuffer[x*h+y] = z
+					RW.Unlock()
+				} else {
+					RW.RUnlock()
+				}
 
+			}
+		}
+	}
 }
 func GeometryShader() {
 
@@ -111,10 +202,15 @@ func GeometryShader() {
 func (p *Point) VertexShader() {
 
 }
-func FragmentShader() {
+func (r *Render) FragmentShader(s, e int, zbuffer []float64, wg *sync.WaitGroup, rw *sync.RWMutex, imag *image.RGBA, mtl *MipMap) {
 
+	for i := s; i < e; i++ {
+		r.Face[i].BlinPhong(zbuffer, r.Points, r.TextColor, rw, imag, mtl)
+	}
+	fmt.Printf("this process is %v-%v\n", s, e)
+	// wg.Done()
 }
-func inside(a, b, c, p *vector.Vector3D) (judge bool, u *vector.Vector3D) {
+func inside(a, b, c *PointV, p *vector.Vector3D) (judge bool, u *vector.Vector3D) {
 	var (
 		i float64 = (-(p.X-b.X)*(c.Y-b.Y) + (p.Y-b.Y)*(c.X-b.X)) / (-(a.X-b.X)*(c.Y-b.Y) + (a.Y-b.Y)*(c.X-b.X))
 		j float64 = (-(p.X-c.X)*(a.Y-c.Y) + (p.Y-c.Y)*(a.X-c.X)) / (-(b.X-c.X)*(a.Y-c.Y) + (b.Y-c.Y)*(a.X-c.X))
