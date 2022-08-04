@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ftrvxmtrx/tga"
 	"golang.org/x/image/tiff"
 )
 
@@ -24,14 +25,50 @@ type MipMap struct {
 	LevelImage []image.Image
 }
 
-func (mipmap *MipMap) UV(l, u, v float64) color.RGBA {
-	c := mipmap.LevelImage[int(l)].At(int(u*float64(mipmap.LevelImage[int(l)].Bounds().Dx())), int(v*float64(mipmap.LevelImage[int(l)].Bounds().Dy())))
-	r, g, b, a := c.RGBA()
-	r = r & 255
-	g = g & 255
-	b = b & 255
-	a = a & 255
+func (mipmap *MipMap) UV(u, v, u1, v1, u2, v2 float64) color.RGBA {
+	ut, vt := u, v
+	u = u * float64(mipmap.w)
+	v = v * float64(mipmap.h)
+	u1 = u1 * float64(mipmap.w)
+	v1 = v1 * float64(mipmap.h)
+	u2 = u2 * float64(mipmap.w)
+	v2 = v2 * float64(mipmap.h)
+	l := math.Max(math.Sqrt(math.Pow(u1-u, 2)+math.Pow(v1-v, 2)), math.Sqrt(math.Pow(u2-u, 2)+math.Pow(v2-v, 2)))
+	l = math.Log2(l)
+	l = math.Max(l, 0)
+	l = math.Min(l, float64(len(mipmap.LevelImage)))
+	floor := math.Floor(l)
+	ceil := math.Ceil(l)
+	c1 := mipmap.LevelImage[int(floor)].At(int(ut*float64(mipmap.LevelImage[int(floor)].Bounds().Dx()-1)), int(vt*float64(mipmap.LevelImage[int(floor)].Bounds().Dx()-1)))
+	c2 := mipmap.LevelImage[int(ceil)].At(int(ut*float64(mipmap.LevelImage[int(ceil)].Bounds().Dx()-1)), int(vt*float64(mipmap.LevelImage[int(ceil)].Bounds().Dx()-1)))
+	r1, g1, b1, a1 := c1.RGBA()
+	r1 = r1 & 255
+	g1 = g1 & 255
+	b1 = b1 & 255
+	a1 = a1 & 255
+	r2, g2, b2, a2 := c2.RGBA()
+	r2 = r2 & 255
+	g2 = g2 & 255
+	b2 = b2 & 255
+	a2 = a2 & 255
+	r := r1 + r2*(uint32(ceil-l))
+	g := g1 + g2*(uint32(ceil-l))
+	b := b1 + b2*(uint32(ceil-l))
+	a := a1 + a2*(uint32(ceil-l))
 	return color.RGBA{uint8(r), uint8(g), uint8(b), uint8(a)}
+}
+func (mipmap *MipMap) NearUV(u, v float64) color.RGBA {
+	u = u * float64(mipmap.w-1)
+	v = v * float64(mipmap.h-1)
+	r, g, b, a := mipmap.LevelImage[0].At(int(u), int(v)).RGBA()
+	return color.RGBA{uint8(r & 255), uint8(g & 255), uint8(b & 255), uint8(a & 255)}
+}
+func (mipmap *MipMap) BilinearUV(u, v float64) color.RGBA {
+	u = u * float64(mipmap.w-1)
+	v = v * float64(mipmap.h-1)
+
+	r, g, b, a := mipmap.LevelImage[0].At(int(u), int(v)).RGBA()
+	return color.RGBA{uint8(r & 255), uint8(g & 255), uint8(b & 255), uint8(a & 255)}
 }
 func NewMipMap(path string) (mipmap *MipMap) {
 	var (
@@ -67,7 +104,6 @@ func NewMipMap(path string) (mipmap *MipMap) {
 				g = (g&255 + g2&255 + g3&255 + g4&255) / 4
 				b = (b&255 + b2&255 + b3&255 + b4&255) / 4
 				a = (a&255 + a2&255 + a3&255 + a4&255) / 4
-
 				temp.Set(k/2, h/2, color.RGBA{uint8(r), uint8(g), uint8(b), uint8(a)})
 			}
 		}
@@ -87,6 +123,10 @@ func readImage(path string) (images image.Image, err error) {
 
 	} else if strings.HasSuffix(path, "tif") {
 		images, err = tiff.Decode(file)
+	} else if strings.HasSuffix(path, "tga") {
+		images, err = tga.Decode(file)
+	} else if strings.HasSuffix(path, "jpg") {
+		images, err = jpeg.Decode(file)
 	}
 	return
 }
