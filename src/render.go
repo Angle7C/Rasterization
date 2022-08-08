@@ -26,10 +26,12 @@ type RenderPipline interface {
 type PointV vector.Vector3D
 type UV vector.Vector3D
 type NormalV vector.Vector3D
-
-var lightPos *vector.Vector3D
-var lightInten *vector.Vector3D
-
+type Light struct {
+	Pos    vector.Vector3D
+	Indent vector.Vector3D
+	eyePos vector.Vector3D
+	alight vector.Vector3D
+}
 type Render struct {
 	Points      []PointV
 	Face        []Face
@@ -42,15 +44,30 @@ type Render struct {
 	viewPort    *matrix.Matrix4
 }
 
-func SetLight(l *vector.Vector3D) {
-	lightPos = l
-	lightInten = vector.NewVector3D(500, 500, 500)
+var light Light
+
+func MakeLight(pos, iden, eyepos vector.Vector3D) {
+	pos.W = 1
+	iden.W = 1
+	eyepos.W = 1
+	light.Pos = pos
+	light.Indent = iden
+	light.eyePos = eyepos
+	light.alight = vector.Vector3D{10, 10, 10, 255}
 }
-func (r *Render) MVP() {
-	mvp := r.perspectMat.Mul(r.viewMat.Mul(r.modelMat))
+func (r *Render) MVP() []PointV {
+	mv := r.viewMat.Mul(r.modelMat)
 	r.W = make([]float64, len(r.Points))
-	for i := 0; i < len(r.Points); i++ {
-		vd := mvp.MulVector3D((*vector.Vector3D)(&r.Points[i]))
+	list := make([]PointV, len(r.Points))
+	for i := 0; i < len(list); i++ {
+		v := r.modelMat.MulVector3D((*vector.Vector3D)(&r.Points[i]))
+		if r.Normal != nil {
+			n := r.modelMat.MulVector3D((*vector.Vector3D)(&r.Normal[i]))
+			r.Normal[i] = NormalV(*n.Normal())
+		}
+		list[i] = PointV(*v)
+		vd := mv.MulVector3D((*vector.Vector3D)(&r.Points[i]))
+		vd = r.perspectMat.MulVector3D(vd)
 		vd.X /= vd.W
 		vd.Y /= vd.W
 		vd.Z /= vd.W
@@ -58,6 +75,7 @@ func (r *Render) MVP() {
 		vd.W /= vd.W
 		r.Points[i] = PointV(*vd)
 	}
+	return list
 }
 func NewRenderObj(o *obj.Model) (r *Render, err error) {
 	r = &Render{}
@@ -108,7 +126,14 @@ func (r *Render) SetModelMat(temp *matrix.Matrix4) {
 func (r *Render) MakeViewMat(eye, target, up *vector.Vector3D) {
 	r.viewMat = r.viewMat.LookAt(eye, target, up)
 }
-
+func clamp(value, min, max float64) uint8 {
+	if value > 255 {
+		value = 255
+	} else if value < 0 {
+		value = 0
+	}
+	return uint8(value)
+}
 func (r *Render) MakePerspectMat(fov, aspect, near, far float64) {
 	r.perspectMat = r.perspectMat.MakePerspective(fov, aspect, near, far)
 }
@@ -138,70 +163,74 @@ func (r *Render) Render(image *image.RGBA, mtl *MtlData) {
 	for i := 0; i < len(zbuffer); i++ {
 		zbuffer[i] = math.Inf(1)
 	}
-	r.MVP()
+	viewPos := r.MVP()
 	r.ToScreen()
-	if len(r.Face) > 0 {
+	if len(r.Face) < 4 {
 		WG.Add(1)
-		r.FragmentShader(0, len(r.Face), zbuffer, r.W, WG, RW, image, mtl)
+		r.FragmentShader(0, len(r.Face), zbuffer, r.W, WG, RW, image, mtl, viewPos)
 	} else {
 		WG.Add(4)
 		ds := len(r.Face) / 4
-		go r.FragmentShader(0, ds, zbuffer, r.W, WG, RW, image, mtl)
-		go r.FragmentShader(ds, 2*ds, zbuffer, r.W, WG, RW, image, mtl)
-		go r.FragmentShader(2*ds, 3*ds, zbuffer, r.W, WG, RW, image, mtl)
-		go r.FragmentShader(3*ds, len(r.Face), zbuffer, r.W, WG, RW, image, mtl)
+		go r.FragmentShader(0, ds, zbuffer, r.W, WG, RW, image, mtl, viewPos)
+		go r.FragmentShader(ds, 2*ds, zbuffer, r.W, WG, RW, image, mtl, viewPos)
+		go r.FragmentShader(2*ds, 3*ds, zbuffer, r.W, WG, RW, image, mtl, viewPos)
+		go r.FragmentShader(3*ds, len(r.Face), zbuffer, r.W, WG, RW, image, mtl, viewPos)
 		WG.Wait()
 	}
 }
 func (face *Face) renderFace(zbuffer []float64, point []PointV, TextUV []UV, RW *sync.RWMutex, image *image.RGBA) {
 }
-func (face *Face) BlinPhong(zbuffer, W []float64, point []PointV, TextUV []UV, Normal []NormalV, RW *sync.RWMutex, image *image.RGBA, mtl *MtlData) {
+func (face *Face) BlinPhong(zbuffer, W []float64, point []PointV, TextUV []UV, Normal []NormalV,
+	RW *sync.RWMutex, image *image.RGBA, mtl *MtlData, viewPos []PointV) {
 	var (
 		au, bu, cu UV
 		ap, bp, cp PointV
 		an, bn, cn NormalV
-		color      color.RGBA
-		n          *vector.Vector3D
+		av, bv, cv PointV
+		colors     color.RGBA
+		n          vector.Vector3D
+		pos        vector.Vector3D
 		xmin       float64
 		xmax       float64
 		ymin       float64
 		ymax       float64
 		w          int = image.Rect.Dx()
 		h          int = image.Rect.Dy()
-		u          float64
-		v          float64
 	)
 	w1, w2, w3 := W[face.PointIndex[0]], W[face.PointIndex[1]], W[face.PointIndex[2]]
 	au, bu, cu = TextUV[face.TextCoords[0]], TextUV[face.TextCoords[1]], TextUV[face.TextCoords[2]]
 	ap, bp, cp = point[face.PointIndex[0]], point[face.PointIndex[1]], point[face.PointIndex[2]]
-	an, bn, cn = Normal[face.NormalIndex[0]], Normal[face.NormalIndex[1]], Normal[face.NormalIndex[2]]
+	if Normal != nil {
+		an, bn, cn = Normal[face.NormalIndex[0]], Normal[face.NormalIndex[1]], Normal[face.NormalIndex[2]]
+	}
+	av, bv, cv = viewPos[face.PointIndex[0]], viewPos[face.PointIndex[1]], viewPos[face.PointIndex[2]]
 	xmin = math.Min(ap.X, math.Min(bp.X, cp.X))
 	xmax = math.Max(ap.X, math.Max(bp.X, cp.X))
 	ymin = math.Min(ap.Y, math.Min(bp.Y, cp.Y))
 	ymax = math.Max(ap.Y, math.Max(bp.Y, cp.Y))
-	for x := int(xmin); x >= 0 && x < w && x < int(xmax); x++ {
-		for y := int(ymin); y >= 0 && y < h && y < int(ymax); y++ {
+	//包围盒
+	for x := int(xmin); x >= 0 && x < w && x <= int(xmax); x++ {
+		for y := int(ymin); y >= 0 && y < h && y <= int(ymax); y++ {
 			if judge, t := inside(&ap, &bp, &cp, vector.NewVector3D(float64(x)+0.5, float64(y)+0.5, 1)); judge {
+
 				z := 1.0 / (t.X*w1/ap.Z + t.Y*w2/bp.Z + t.Z*w3/cp.Z)
-				u = (t.X*w1/ap.Z*au.X + t.Y*w2/bp.Z*bu.X + t.Z*w3/cp.Z*cu.X) * z
-				v = (t.X*w1/ap.Z*au.Y + t.Y*w2/bp.Z*bu.Y + t.Z*w3/cp.Z*cu.Y) * z
-				_, t1 := inside(&ap, &bp, &cp, vector.NewVector3D(float64(x)+1.5, float64(y)+0.5, 1))
-				z1 := 1.0 / (t1.X*w1/ap.Z + t1.Y*w2/bp.Z + t1.Z*w3/cp.Z)
-				u1 := (t1.X*w1/ap.Z*au.X + t1.Y*w2/bp.Z*bu.X + t1.Z*w3/cp.Z*cu.X) * z1
-				v1 := (t1.X*w1/ap.Z*au.Y + t1.Y*w2/bp.Z*bu.Y + t1.Z*w3/cp.Z*cu.Y) * z1
-				_, t2 := inside(&ap, &bp, &cp, vector.NewVector3D(float64(x)+0.5, float64(y)+1.5, 1))
-				z2 := 1.0 / (t2.X*w1/ap.Z + t2.Y*w2/bp.Z + t2.Z*w3/cp.Z)
-				u2 := (t2.X*w1/ap.Z*au.X + t2.Y*w2/bp.Z*bu.X + t2.Z*w3/cp.Z*cu.X) * z2
-				v2 := (t2.X*w1/ap.Z*au.Y + t2.Y*w2/bp.Z*bu.Y + t2.Z*w3/cp.Z*cu.Y) * z2
-				RW.RLock()
-				if zbuffer[x*w+y] > z {
-					RW.RUnlock()
-					RW.Lock()
-					color = mtl.TextMap.UV(u, v, u1, v1, u2, v2)
+				//uv 三线性插值
+				if Normal != nil {
 					n.X = (t.X*an.X + t.Y*bn.X + t.Z*cn.X)
 					n.Y = (t.X*an.Y + t.Y*bn.Y + t.Z*cn.Y)
 					n.Z = (t.X*an.Z + t.Y*bn.Z + t.Z*cn.Z)
-					image.Set(int(x), int(y), mtl.TextMap.UV(u, v, u1, v1, u2, v2))
+				}
+				pos.X = (t.X*av.X + t.Y*bv.X + t.Z*cv.X)
+				pos.Y = (t.X*av.Y + t.Y*bv.Y + t.Z*cv.Y)
+				pos.Z = (t.X*av.Z + t.Y*bv.Z + t.Z*cv.Z)
+				colors = getColor(*mtl.kd, *mtl.ks, *mtl.ka, &pos,
+					&n, interpolateUV(x, y, ap, bp, cp, au, bu, cu, t, w1, w2, w3, mtl.TextMap), 1)
+				// colors = interpolateUV(x, y, ap, bp, cp, au, bu, cu, t, w1, w2, w3, mtl.TextMap)
+				RW.RLock()
+				if zbuffer[x*h+y] >= z {
+					RW.RUnlock()
+					RW.Lock()
+					image.Set(int(x), int(y), colors)
 					zbuffer[x*h+y] = z
 					RW.Unlock()
 				} else {
@@ -212,16 +241,64 @@ func (face *Face) BlinPhong(zbuffer, W []float64, point []PointV, TextUV []UV, N
 		}
 	}
 }
+
+//uv 三线性插值
+func interpolateUV(x, y int, ap, bp, cp PointV, au, bu, cu UV, t *vector.Vector3D,
+	w1, w2, w3 float64, textMap *MipMap) color.RGBA {
+	z := 1.0 / (t.X*w1/ap.Z + t.Y*w2/bp.Z + t.Z*w3/cp.Z)
+	u := (t.X*w1/ap.Z*au.X + t.Y*w2/bp.Z*bu.X + t.Z*w3/cp.Z*cu.X) * z
+	v := (t.X*w1/ap.Z*au.Y + t.Y*w2/bp.Z*bu.Y + t.Z*w3/cp.Z*cu.Y) * z
+	_, t1 := inside(&ap, &bp, &cp, vector.NewVector3D(float64(x)+1.5, float64(y)+0.5, 1))
+	z1 := 1.0 / (t1.X*w1/ap.Z + t1.Y*w2/bp.Z + t1.Z*w3/cp.Z)
+	u1 := (t1.X*w1/ap.Z*au.X + t1.Y*w2/bp.Z*bu.X + t1.Z*w3/cp.Z*cu.X) * z1
+	v1 := (t1.X*w1/ap.Z*au.Y + t1.Y*w2/bp.Z*bu.Y + t1.Z*w3/cp.Z*cu.Y) * z1
+	_, t2 := inside(&ap, &bp, &cp, vector.NewVector3D(float64(x)+0.5, float64(y)+1.5, 1))
+	z2 := 1.0 / (t2.X*w1/ap.Z + t2.Y*w2/bp.Z + t2.Z*w3/cp.Z)
+	u2 := (t2.X*w1/ap.Z*au.X + t2.Y*w2/bp.Z*bu.X + t2.Z*w3/cp.Z*cu.X) * z2
+	v2 := (t2.X*w1/ap.Z*au.Y + t2.Y*w2/bp.Z*bu.Y + t2.Z*w3/cp.Z*cu.Y) * z2
+	r := textMap.UV(u, v, u1, v1, u2, v2)
+	// return vector.Vector3D{float64(r.R), float64(r.G), float64(r.B), 255}
+	// r = color.RGBA{0, uint8(255 * u), uint8(255 * v), uint8(255)}
+	return r
+}
+func getColor(kd, ks, ka vector.Vector3D, Pos, Normal *vector.Vector3D, c color.RGBA, p float64) color.RGBA {
+	n := Normal.Normal()
+	length := (light.Pos.Subto(Pos)).Normality2()
+	v := light.eyePos.Subto(Pos).Normal()
+	l := light.Pos.Subto(Pos).Normal()
+	h := l.Add(v).Normal()
+	rate := math.Max(n.Dot(l), 0) * 100 / length
+	r := float64(c.R) * rate * light.Indent.X
+	g := float64(c.G) * rate * light.Indent.Y
+	b := float64(c.B) * rate * light.Indent.Z
+
+	Ld := vector.NewVector3D(r, g, b)
+	// Ld = vector.NewVector3D(0, 0, 0)
+	rate = math.Pow(math.Max(0, v.Dot(h)), p) * 10000 / length
+	r = ks.X * rate * float64(c.R)
+	g = ks.Y * rate * float64(c.G)
+	b = ks.Z * rate * float64(c.B)
+	Ls := vector.NewVector3D(r, g, b)
+	r = ka.X * float64(c.R)
+	g = ka.Y * float64(c.G)
+	b = ka.Z * float64(c.B)
+
+	La := vector.NewVector3D(r, g, b)
+	// La = vector.NewVector3D(0, 0, 0)
+	vd := Ld.Add(Ls).Add(La)
+
+	return color.RGBA{clamp(vd.X, 0, 255), clamp(vd.Y, 0, 255), clamp(vd.Z, 0, 255), 255}
+}
 func GeometryShader() {
 
 }
 func (p *Point) VertexShader() {
 
 }
-func (r *Render) FragmentShader(s, e int, zbuffer, W []float64, wg *sync.WaitGroup, rw *sync.RWMutex, imag *image.RGBA, mtl *MtlData) {
+func (r *Render) FragmentShader(s, e int, zbuffer, W []float64, wg *sync.WaitGroup, rw *sync.RWMutex, imag *image.RGBA, mtl *MtlData, viewPos []PointV) {
 
 	for i := s; i < e; i++ {
-		r.Face[i].BlinPhong(zbuffer, W, r.Points, r.TextColor, r.Normal, rw, imag, mtl)
+		r.Face[i].BlinPhong(zbuffer, W, r.Points, r.TextColor, r.Normal, rw, imag, mtl, viewPos)
 	}
 	fmt.Printf("this process is %v-%v\n", s, e)
 	wg.Done()
@@ -232,7 +309,7 @@ func inside(a, b, c *PointV, p *vector.Vector3D) (judge bool, u *vector.Vector3D
 		j float64 = (-(p.X-c.X)*(a.Y-c.Y) + (p.Y-c.Y)*(a.X-c.X)) / (-(b.X-c.X)*(a.Y-c.Y) + (b.Y-c.Y)*(a.X-c.X))
 		k float64 = 1 - i - j
 	)
-	judge = (i >= 0 && j >= 0 && k >= 0 && i <= 1 && j <= 1 && k <= 1)
+	judge = (i > 0 && j > 0 && k > 0 && i <= 1 && j <= 1 && k <= 1)
 	u = vector.NewVector3D(i, j, k)
 	return
 }

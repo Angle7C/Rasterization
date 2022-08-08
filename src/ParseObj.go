@@ -17,6 +17,7 @@ type MtlData struct {
 
 func Parse(path, name string) (model *obj.Model, mtls *MtlData) {
 	decoder := obj.NewDecoder(obj.DefaultLimits())
+	mtls = &MtlData{}
 	file1, _ := os.Open(path + name)
 	defer file1.Close()
 	model, _ = decoder.Decode(file1)
@@ -32,15 +33,19 @@ func Parse(path, name string) (model *obj.Model, mtls *MtlData) {
 
 	return
 }
-func ParseNoMtl(path, name string) (*obj.Model, *MipMap) {
+func ParseNoMtl(path, name string) (model *obj.Model, mtls *MtlData) {
 	decoder := obj.NewDecoder(obj.DefaultLimits())
 	file1, _ := os.Open(path + name)
 	defer file1.Close()
-	model, _ := decoder.Decode(file1)
+	model, _ = decoder.Decode(file1)
 	// mm := NewMipMap(path + "floor_diffuse.tga")
 	// mm := NewMipMap(path + "crate_1.jpg")
 	// mm := NewMipMap(path + "rock.png")
 	mm := NewMipMap(path + "spot_texture.png")
-
-	return model, mm
+	mtls = &MtlData{}
+	mtls.TextMap = mm
+	mtls.ka = vector.NewVector3D(0, 0, 0)
+	mtls.kd = vector.NewVector3D(0.64, 0.64, 0.64)
+	mtls.ks = vector.NewVector3D(0.5, 0.5, 0.5)
+	return
 }

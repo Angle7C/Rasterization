@@ -36,9 +36,11 @@ func (mipmap *MipMap) UV(u, v, u1, v1, u2, v2 float64) color.RGBA {
 	l := math.Max(math.Sqrt(math.Pow(u1-u, 2)+math.Pow(v1-v, 2)), math.Sqrt(math.Pow(u2-u, 2)+math.Pow(v2-v, 2)))
 	l = math.Log2(l)
 	l = math.Max(l, 0)
-	l = math.Min(l, float64(len(mipmap.LevelImage)))
+	l = math.Min(l, float64(len(mipmap.LevelImage))-1)
 	floor := math.Floor(l)
 	ceil := math.Ceil(l)
+	// floor = 0
+	// ceil = 0
 	c1 := mipmap.LevelImage[int(floor)].At(int(ut*float64(mipmap.LevelImage[int(floor)].Bounds().Dx()-1)), int(vt*float64(mipmap.LevelImage[int(floor)].Bounds().Dx()-1)))
 	c2 := mipmap.LevelImage[int(ceil)].At(int(ut*float64(mipmap.LevelImage[int(ceil)].Bounds().Dx()-1)), int(vt*float64(mipmap.LevelImage[int(ceil)].Bounds().Dx()-1)))
 	r1, g1, b1, a1 := c1.RGBA()
@@ -76,7 +78,6 @@ func NewMipMap(path string) (mipmap *MipMap) {
 		err   error
 		level int
 		last  image.Image
-		// tmep   image.Image
 	)
 	imag, err = readImage(path)
 	mipmap = &MipMap{}
