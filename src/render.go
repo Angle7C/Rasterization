@@ -16,8 +16,6 @@ type RenderPipline interface {
 	MakeModelMat(x, y, z float64)
 	MakeViewMat(eye, target, up *vector.Vector3D)
 	MakePerspectMat(fov, aspect, near, far float64)
-	GeometryShader()
-	VertexShader()
 	FragmentShader()
 	MVP()
 	ToScreen()
@@ -26,12 +24,7 @@ type RenderPipline interface {
 type PointV vector.Vector3D
 type UV vector.Vector3D
 type NormalV vector.Vector3D
-type Light struct {
-	Pos    vector.Vector3D
-	Indent vector.Vector3D
-	eyePos vector.Vector3D
-	alight vector.Vector3D
-}
+
 type Render struct {
 	Points      []PointV
 	Face        []Face
@@ -50,10 +43,9 @@ func MakeLight(pos, iden, eyepos vector.Vector3D) {
 	pos.W = 1
 	iden.W = 1
 	eyepos.W = 1
-	light.Pos = pos
-	light.Indent = iden
+	light.Pos[0] = pos
+	light.Indent[0] = iden
 	light.eyePos = eyepos
-	light.alight = vector.Vector3D{10, 10, 10, 255}
 }
 func (r *Render) MVP() []PointV {
 	mv := r.viewMat.Mul(r.modelMat)
@@ -126,14 +118,7 @@ func (r *Render) SetModelMat(temp *matrix.Matrix4) {
 func (r *Render) MakeViewMat(eye, target, up *vector.Vector3D) {
 	r.viewMat = r.viewMat.LookAt(eye, target, up)
 }
-func clamp(value, min, max float64) uint8 {
-	if value > 255 {
-		value = 255
-	} else if value < 0 {
-		value = 0
-	}
-	return uint8(value)
-}
+
 func (r *Render) MakePerspectMat(fov, aspect, near, far float64) {
 	r.perspectMat = r.perspectMat.MakePerspective(fov, aspect, near, far)
 }
@@ -263,14 +248,14 @@ func interpolateUV(x, y int, ap, bp, cp PointV, au, bu, cu UV, t *vector.Vector3
 }
 func getColor(kd, ks, ka vector.Vector3D, Pos, Normal *vector.Vector3D, c color.RGBA, p float64) color.RGBA {
 	n := Normal.Normal()
-	length := (light.Pos.Subto(Pos)).Normality2()
+	length := (light.Pos[0].Subto(Pos)).Normality2()
 	v := light.eyePos.Subto(Pos).Normal()
-	l := light.Pos.Subto(Pos).Normal()
+	l := light.Pos[0].Subto(Pos).Normal()
 	h := l.Add(v).Normal()
 	rate := math.Max(n.Dot(l), 0) * 100 / length
-	r := float64(c.R) * rate * light.Indent.X
-	g := float64(c.G) * rate * light.Indent.Y
-	b := float64(c.B) * rate * light.Indent.Z
+	r := float64(c.R) * rate * light.Indent[0].X
+	g := float64(c.G) * rate * light.Indent[0].Y
+	b := float64(c.B) * rate * light.Indent[0].Z
 
 	Ld := vector.NewVector3D(r, g, b)
 	// Ld = vector.NewVector3D(0, 0, 0)
@@ -287,7 +272,7 @@ func getColor(kd, ks, ka vector.Vector3D, Pos, Normal *vector.Vector3D, c color.
 	// La = vector.NewVector3D(0, 0, 0)
 	vd := Ld.Add(Ls).Add(La)
 
-	return color.RGBA{clamp(vd.X, 0, 255), clamp(vd.Y, 0, 255), clamp(vd.Z, 0, 255), 255}
+	return color.RGBA{uint8(clamp(vd.X, 0, 255)), uint8(clamp(vd.Y, 0, 255)), uint8(clamp(vd.Z, 0, 255)), uint8(clamp(vd.W, 0, 255))}
 }
 func GeometryShader() {
 

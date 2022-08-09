@@ -11,8 +11,8 @@ import (
 type MtlData struct {
 	TextMap *MipMap
 	ka      *vector.Vector3D
-	kd      *vector.Vector3D
 	ks      *vector.Vector3D
+	kd      *vector.Vector3D
 }
 
 func Parse(path, name string) (model *obj.Model, mtls *MtlData) {

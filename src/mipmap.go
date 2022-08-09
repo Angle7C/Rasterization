@@ -1,6 +1,8 @@
 package core
 
 import (
+	"Matrix/vector"
+	"errors"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -13,17 +15,6 @@ import (
 	"github.com/ftrvxmtrx/tga"
 	"golang.org/x/image/tiff"
 )
-
-type MipMaper interface {
-	UV(l, u, v float64)
-	GetRGBA()
-}
-type MipMap struct {
-	Num        int
-	w          int
-	h          int
-	LevelImage []image.Image
-}
 
 func (mipmap *MipMap) UV(u, v, u1, v1, u2, v2 float64) color.RGBA {
 	ut, vt := u, v
@@ -39,8 +30,6 @@ func (mipmap *MipMap) UV(u, v, u1, v1, u2, v2 float64) color.RGBA {
 	l = math.Min(l, float64(len(mipmap.LevelImage))-1)
 	floor := math.Floor(l)
 	ceil := math.Ceil(l)
-	// floor = 0
-	// ceil = 0
 	c1 := mipmap.LevelImage[int(floor)].At(int(ut*float64(mipmap.LevelImage[int(floor)].Bounds().Dx()-1)), int(vt*float64(mipmap.LevelImage[int(floor)].Bounds().Dx()-1)))
 	c2 := mipmap.LevelImage[int(ceil)].At(int(ut*float64(mipmap.LevelImage[int(ceil)].Bounds().Dx()-1)), int(vt*float64(mipmap.LevelImage[int(ceil)].Bounds().Dx()-1)))
 	r1, g1, b1, a1 := c1.RGBA()
@@ -59,11 +48,11 @@ func (mipmap *MipMap) UV(u, v, u1, v1, u2, v2 float64) color.RGBA {
 	a := a1 + a2*(uint32(ceil-l))
 	return color.RGBA{uint8(r), uint8(g), uint8(b), uint8(a)}
 }
-func (mipmap *MipMap) NearUV(u, v float64) color.RGBA {
+func (mipmap *MipMap) NearUV(u, v float64) *vector.Vector3D {
 	u = u * float64(mipmap.w-1)
 	v = v * float64(mipmap.h-1)
 	r, g, b, a := mipmap.LevelImage[0].At(int(u), int(v)).RGBA()
-	return color.RGBA{uint8(r & 255), uint8(g & 255), uint8(b & 255), uint8(a & 255)}
+	return &vector.Vector3D{float64(r & 255), float64(g & 255), float64(b & 255), float64(a & 255)}
 }
 func (mipmap *MipMap) BilinearUV(u, v float64) color.RGBA {
 	u = u * float64(mipmap.w-1)
@@ -80,11 +69,12 @@ func NewMipMap(path string) (mipmap *MipMap) {
 		last  image.Image
 	)
 	imag, err = readImage(path)
-	mipmap = &MipMap{}
+
 	if err != nil {
-		log.Fatalf("err :%v", err)
+		log.Printf("err: %v\n", err)
 		return
 	}
+	mipmap = &MipMap{}
 	mipmap.w = imag.Bounds().Dx()
 	mipmap.h = imag.Bounds().Dy()
 	level = int(math.Log2(float64(imag.Bounds().Dx())) + 1)
@@ -128,6 +118,8 @@ func readImage(path string) (images image.Image, err error) {
 		images, err = tga.Decode(file)
 	} else if strings.HasSuffix(path, "jpg") {
 		images, err = jpeg.Decode(file)
+	} else {
+		images, err = nil, errors.New(path+" suffix not in png,jpg,tif,tga ")
 	}
 	return
 }
