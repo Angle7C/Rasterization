@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"log"
 	"os"
+	"sync"
 
 	"github.com/mokiat/go-data-front/decoder/mtl"
 )
@@ -19,8 +20,14 @@ type Modeler interface {
 	loadTexture(path, name, ty string)
 }
 type DepthMessage struct {
-	Depth  float64
-	Colors color.RGBA
+	Depth  []float64
+	Colors []color.RGBA
+	rw     *sync.RWMutex
+}
+type Vertex struct {
+	normIndex    int64
+	pointIndex   int64
+	textureIndex int64
 }
 type Model struct {
 	diffuseMap  *MapData
@@ -30,7 +37,8 @@ type Model struct {
 	specularMap *MapData
 	point       []vector.Vector3D
 	rawPoint    []vector.Vector3D
-	face        []int64
+	face        []Vertex
+	faceNum     int64
 	w           []float64
 	normal      []vector.Vector3D
 	texture     []vector.Vector2D
@@ -60,4 +68,11 @@ func init() {
 		panic(err)
 	}
 	log.SetOutput(f)
+}
+func NewZbuffer(x, y int) *DepthMessage {
+	temp := DepthMessage{}
+	temp.Colors = make([]color.RGBA, x*y)
+	temp.Depth = make([]float64, x*y)
+	temp.rw = &sync.RWMutex{}
+	return &temp
 }

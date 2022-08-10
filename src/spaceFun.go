@@ -3,6 +3,11 @@ package core
 import (
 	"Matrix/matrix"
 	"Matrix/vector"
+	"image"
+	"image/color"
+	"image/png"
+	"os"
+	"sync"
 )
 
 //光结构
@@ -15,7 +20,7 @@ type Light struct {
 //空间结构
 type Space struct {
 	models      []Model
-	zbuffer     []DepthMessage
+	zbuffer     DepthMessage
 	viewMat     *matrix.Matrix4
 	perspectMat *matrix.Matrix4
 	viewPort    *matrix.Matrix4
@@ -62,4 +67,29 @@ func (world *Space) MakePerspective(fov, aspect, near, far float64) {
 //设置viewMat 视图矩阵
 func (world *Space) MakeView(target *vector.Vector3D) {
 	world.viewMat = world.viewMat.LookAt(&light.eyePos, target, vector.NewVector3D(0, 1, 0))
+}
+func (world *Space) Render(out string, w, h int) {
+	var (
+		wg *sync.WaitGroup = &sync.WaitGroup{}
+	)
+	f, _ := os.OpenFile(out, os.O_CREATE, 0777)
+	n := image.NewRGBA(image.Rect(0, 0, w, h))
+	world.MakeViewPort(float64(w), float64(h))
+	world.zbuffer = *NewZbuffer(w, h)
+	wg.Add(len(world.models))
+	for _, v := range world.models {
+		go v.Render(world.zbuffer, wg, n, h)
+
+	}
+	png.Encode(f, n)
+}
+func (zbuffer *DepthMessage) judgeZbuffer(z float64, x, y, h int) bool {
+	zbuffer.rw.RLock()
+	defer zbuffer.rw.RUnlock()
+	return zbuffer.Depth[x*h+y] > z
+}
+func (zbuffer *DepthMessage) setZbuffer(x, y, h int, rgb color.RGBA) {
+	zbuffer.rw.Lock()
+	defer zbuffer.rw.Unlock()
+	zbuffer.Colors[x*h+y] = rgb
 }
