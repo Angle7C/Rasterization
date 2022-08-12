@@ -16,15 +16,6 @@ import (
 
 // author: chen
 // 2022/8/8
-// 判断[x*h+y]位置的zbuffer是否大于depth，并返回判断结果和相应位置的颜色
-func judge(zbuffer []DepthMessage, depth float64, x, y, h int) (judge bool, color color.RGBA) {
-	judge = zbuffer[x*h+y].Depth > depth
-	color = zbuffer[x*h+y].Colors
-	return
-}
-
-// author: chen
-// 2022/8/8
 // 将值限制在[min,max]之间
 // 支持泛型 float，int
 func clamp[T numbers](value, min, max T) T {
@@ -88,7 +79,7 @@ func NewModel(path, name string) (m *Model, err error) {
 		if len(v.References) == 3 {
 			m.faceNum++
 			temp := Vertex{}
-			for i := 0; i <= 3; i++ {
+			for i := 0; i < 3; i++ {
 				temp.normIndex = v.References[i].NormalIndex
 				temp.pointIndex = v.References[i].VertexIndex
 				temp.textureIndex = v.References[i].TexCoordIndex
@@ -164,7 +155,7 @@ func (model *Model) loadTexture(path, name, ty string) {
 // 2022/8/9
 //放缩矩阵
 func (model *Model) MakeScales(x, y, z float64) {
-	model.modelMat.MulScale(x, y, z)
+	model.modelMat = model.modelMat.MulScale(x, y, z)
 }
 
 // author: chen
@@ -172,7 +163,7 @@ func (model *Model) MakeScales(x, y, z float64) {
 // 旋转矩阵
 func (model *Model) MakeRotation(x, y, z float64) {
 	m := matrix.NewMatrix4()
-	m.MulRoTationX(x).MulRoTationY(y).MulRoTationZ(z)
+	m = m.MulRoTationX(x).MulRoTationY(y).MulRoTationZ(z)
 	model.modelMat = m.Mul(model.modelMat)
 }
 
@@ -181,7 +172,7 @@ func (model *Model) MakeRotation(x, y, z float64) {
 // 平移矩阵
 func (Model *Model) MakeTranslation(x, y, z float64) {
 	m := matrix.NewMatrix4()
-	m.MulTranslation(x, y, z)
+	m = m.MulTranslation(x, y, z)
 	Model.modelMat = m.Mul(Model.modelMat)
 }
 
@@ -198,21 +189,23 @@ func (Model *Model) getFace(index int64) (i, j, k *Vertex) {
 // author: chen
 // 2022/8/9
 // 渲染程序
-func (Model *Model) Render(zbuffer DepthMessage, wg *sync.WaitGroup, image *image.RGBA, h int) {
+func (Model *Model) Render(zbuffer *DepthMessage, wg *sync.WaitGroup, image *image.RGBA, h int, light Light, v, viewPort *matrix.Matrix4) {
 	var (
 		index int64
 	)
+	Model.renderShadow(zbuffer, image, v, viewPort, light)
 	for index = 0; index < Model.faceNum; index++ {
 		i, j, k := Model.getFace(index)
-		Model.renderTriangle(i, j, k, zbuffer, h, light)
-
+		Model.renderTriangle(i, j, k, zbuffer, image.Rect.Dx(), image.Rect.Dy(), light)
 	}
+	log.Printf("sucess\n")
+	wg.Done()
 }
 
 // author: chen
 // 2022/8/9
 // 渲染一个三角形
-func (Model *Model) renderTriangle(a, b, c *Vertex, zbuffer DepthMessage, h int, light Light) {
+func (Model *Model) renderTriangle(a, b, c *Vertex, zbuffer *DepthMessage, w, h int, light Light) {
 	var (
 		ap, bp, cp, p *vector.Vector3D
 		an, bn, cn, n *vector.Vector3D
@@ -227,8 +220,8 @@ func (Model *Model) renderTriangle(a, b, c *Vertex, zbuffer DepthMessage, h int,
 	aw, bw, cw = Model.getFaceWeight(a.pointIndex, b.pointIndex, c.pointIndex)
 	ar, br, cr = Model.getFaceRawPoint(a.pointIndex, b.pointIndex, c.pointIndex)
 	box := genertorBox(ap, bp, cp)
-	for x := box.Min.X; x <= box.Max.X; x++ {
-		for y := box.Min.Y; y <= box.Max.Y; y++ {
+	for x := box.Min.X; x <= box.Max.X && x < w && x >= 0; x++ {
+		for y := box.Min.Y; y <= box.Max.Y && y < h && y >= 0; y++ {
 			p = vector.NewVector3D(float64(x)+0.5, float64(y)+0.5, 1)
 			if judge, t := inside(ap, bp, cp, p); judge {
 				p.Z = 1.0 / (t.X*aw/ap.Z + t.Y*bw/bp.Z + t.Z*cw/cp.Z)
@@ -240,9 +233,44 @@ func (Model *Model) renderTriangle(a, b, c *Vertex, zbuffer DepthMessage, h int,
 						Model.diffuseMap.value,
 						Model.specularMap.value,
 						Model.ambientxMap.value,
-						r, n, rgb, light, 10,
+						r, n, rgb, light, 1,
 					)
-					zbuffer.setZbuffer(x, y, h, rgb)
+					zbuffer.setZbuffer(x, y, h, p.Z, rgb)
+				}
+			}
+		}
+	}
+}
+func (Model *Model) renderShadow(zbuffer *DepthMessage, image *image.RGBA, v, viewPort *matrix.Matrix4, light Light) {
+	var (
+		index int64
+	)
+
+	for index = 0; index < Model.faceNum; index++ {
+		i, j, k := Model.getFace(index)
+		Model.renderShadowTriangle(i, j, k, zbuffer, image.Rect.Dx(), image.Rect.Dy(), v, viewPort)
+	}
+	log.Printf("shadow sucess\n")
+}
+func (Model *Model) renderShadowTriangle(a, b, c *Vertex, zbuffer *DepthMessage, w, h int, vp, viewPort *matrix.Matrix4) {
+	var (
+		ap, bp, cp, p *vector.Vector3D
+		aw, bw, cw    float64
+		rgb           color.RGBA      = color.RGBA{255, 255, 255, 255}
+		mvp           *matrix.Matrix4 = vp.Mul(Model.modelMat)
+	)
+	ap, bp, cp = Model.getFaceRawPoint(a.pointIndex, b.pointIndex, c.pointIndex)
+	ap, bp, cp = mvp.MulVector3D(ap), mvp.MulVector3D(bp), mvp.MulVector3D(cp)
+	ap, bp, cp = ap.Mul_lamda(1.0/ap.Z), bp.Mul_lamda(1.0/bp.Z), cp.Mul_lamda(1.0/cp.Z)
+	ap, bp, cp = viewPort.MulVector3D(ap), viewPort.MulVector3D(bp), viewPort.MulVector3D(cp)
+	box := genertorBox(ap, bp, cp)
+	for x := box.Min.X; x <= box.Max.X && x < w && x >= 0; x++ {
+		for y := box.Min.Y; y <= box.Max.Y && y < h && y >= 0; y++ {
+			p = vector.NewVector3D(float64(x)+0.5, float64(y)+0.5, 1)
+			if judge, t := inside(ap, bp, cp, p); judge {
+				p.Z = 1.0 / (t.X*aw/ap.Z + t.Y*bw/bp.Z + t.Z*cw/cp.Z)
+				if zbuffer.judgeZbuffer(p.Z, x, y, h) {
+					zbuffer.setZbuffer(x, y, h, p.Z, rgb)
 				}
 			}
 		}
@@ -283,7 +311,7 @@ func (Model *Model) getFaceWeight(i, j, k int64) (aw, bw, cw float64) {
 	return Model.w[i], Model.w[j], Model.w[k]
 }
 func (Model *Model) getFaceRawPoint(i, j, k int64) (ar, br, cr *vector.Vector3D) {
-	return &Model.rawPoint[i], &Model.rawPoint[j], &Model.rawPoint[k]
+	return Model.modelMat.MulVector3D(&Model.rawPoint[i]), Model.modelMat.MulVector3D(&Model.rawPoint[i]), Model.modelMat.MulVector3D(&Model.rawPoint[i])
 }
 func interpolation3D(a, b, c, t *vector.Vector3D) *vector.Vector3D {
 	temp := matrix.NewMatrix4()
@@ -322,19 +350,19 @@ func getColor(kd, ks, ka *vector.Vector3D, Pos, Normal *vector.Vector3D, c color
 	)
 	for i := 0; i < len(light.Pos); i++ {
 		length := (light.Pos[i].Subto(Pos)).Normality2()
-		v := light.eyePos.Subto(Pos).Normal()
+		v := light.EyePos.Subto(Pos).Normal()
 		l := light.Pos[i].Subto(Pos).Normal()
 		h := l.Add(v).Normal()
 		rate := math.Max(n.Dot(l), 0) * 100 / length
-		r := float64(c.R) * rate * light.Indent[0].X
-		g := float64(c.G) * rate * light.Indent[0].Y
-		b := float64(c.B) * rate * light.Indent[0].Z
+		r := float64(c.R) * rate * light.Indent[i].X * kd.X
+		g := float64(c.G) * rate * light.Indent[i].Y * kd.Y
+		b := float64(c.B) * rate * light.Indent[i].Z * kd.Z
 
 		Ld := vector.NewVector3D(r, g, b)
-		rate = math.Pow(math.Max(0, v.Dot(h)), p) * 10000 / length
-		r = ks.X * rate * float64(c.R)
-		g = ks.Y * rate * float64(c.G)
-		b = ks.Z * rate * float64(c.B)
+		rate = math.Pow(math.Max(0, v.Dot(h)), p) * 1000 / length
+		r = ks.X * rate * float64(c.R) * light.Indent[i].X
+		g = ks.Y * rate * float64(c.G) * light.Indent[i].Y
+		b = ks.Z * rate * float64(c.B) * light.Indent[i].Z
 		Ls := vector.NewVector3D(r, g, b)
 		r = ka.X * float64(c.R)
 		g = ka.Y * float64(c.G)
@@ -342,5 +370,5 @@ func getColor(kd, ks, ka *vector.Vector3D, Pos, Normal *vector.Vector3D, c color
 		La := vector.NewVector3D(r, g, b)
 		vd = vd.Add(Ld.Add(Ls).Add(La))
 	}
-	return color.RGBA{uint8(clamp(vd.X, 0, 255)), uint8(clamp(vd.Y, 0, 255)), uint8(clamp(vd.Z, 0, 255)), uint8(clamp(vd.W, 0, 255))}
+	return color.RGBA{uint8(clamp(vd.X, 0, 255)), uint8(clamp(vd.Y, 0, 255)), uint8(clamp(vd.Z, 0, 255)), 255}
 }

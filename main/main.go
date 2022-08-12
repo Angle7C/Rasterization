@@ -3,48 +3,35 @@ package main
 import (
 	"Matrix/vector"
 	"core"
-	"image"
-	"image/color"
-	"image/png"
-	"os"
 )
 
 func main() {
 	var (
-		w int = 1024
-		h int = 1024
-	// 	err error
-	// 	f   *os.File
-	// 	m   *core.ModelPly
-	// 	i   *image.RGBA
-	// 	r   *core.Render
+		w     int        = 1024
+		h     int        = 1024
+		light core.Light = *core.NewLight(vector.NewVector3D(0, 200, 300))
+		space core.Space
 	)
-	// m, mm := core.Parse("..\\model\\cube\\", "cube.obj")
-	m, mm := core.ParseNoMtl("..\\model\\spot\\", "spot_triangulated_good.obj")
-	// m, mm := core.ParseNoMtl("E:\\MyPro\\C\\tinyrenderer\\obj\\", "floor.obj")
-	// m, mm := core.ParseNoMtl("..\\model\\rock\\", "rock.obj")
-	eye := vector.NewVector3D(00, 200, 250)
-	r, _ := core.NewRenderObj(m)
-	imag := image.NewRGBA(image.Rect(0, 0, w, h))
-	core.MakeLight(
-		*vector.NewVector3D(150, 150, 150),
-		*vector.NewVector3D(900, 900, 900),
-		*eye)
-	r.MakeModelMat(200, 200, 200)
-	r.MakeRoation(45, 45, 40)
-	r.MakeTranslation(0, 00, 00)
-	r.MakeViewMat(
-		eye,
-		vector.NewVector3D(0, 0, 0),
-		vector.NewVector3D(0, 1, 0))
-	r.MakePerspectMat(90, 1, -1, -1000)
-	r.MakeViewPort(float64(w), float64(h))
-	for i := 0; i < imag.Rect.Dx(); i++ {
-		for j := 0; j < imag.Rect.Dy(); j++ {
-			imag.Set(i, j, color.Black)
-		}
+	light.AddLight(*vector.NewVector3D(200, 200, 200), *vector.NewVector3D(500, 500, 500))
+	// light.AddLight(*vector.NewVector3D(0, 200, 00), *vector.NewVector3D(1000, 1000, 1000))
+	space = *core.NewSpace(light)
+	space.MakeView(&light.EyePos, vector.NewVector3D(100, 100, 0))
+	space.MakePerspective(90, 1, -1, -1000)
+	space.MakeViewPort(float64(w), float64(h))
+	a, err := core.NewModel("../model/cube/", "cube.obj")
+	if err != nil {
+		panic(err)
 	}
-	r.Render(imag, mm)
-	f, _ := os.OpenFile("cube.png", os.O_CREATE, 0777)
-	png.Encode(f, imag)
+	a.MakeScales(50, 50, 50)
+	a.MakeTranslation(0, 0, -50)
+	b, err := core.NewModel("E:/MyPro/C/tinyrenderer/obj/", "floor.obj")
+	if err != nil {
+		panic(err)
+	}
+	b.MakeScales(100, 100, 100)
+	b.MakeRotation(0, 0, 0)
+	b.MakeTranslation(0, 0, -100)
+	space.AddModel([]core.Model{*b, *a})
+	space.Render("render.png", w, h)
+
 }

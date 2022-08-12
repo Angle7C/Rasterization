@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"log"
+	"math"
 	"os"
 	"sync"
 
@@ -70,9 +71,12 @@ func init() {
 	log.SetOutput(f)
 }
 func NewZbuffer(x, y int) *DepthMessage {
-	temp := DepthMessage{}
+	temp := &DepthMessage{}
 	temp.Colors = make([]color.RGBA, x*y)
 	temp.Depth = make([]float64, x*y)
-	temp.rw = &sync.RWMutex{}
-	return &temp
+	temp.rw = new(sync.RWMutex)
+	for k, _ := range temp.Colors {
+		temp.Depth[k] = math.MaxFloat64
+	}
+	return temp
 }
